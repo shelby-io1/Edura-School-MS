@@ -5,6 +5,8 @@ Connects directly to school.db, preserves all tables, and handles CRUD operation
 import os
 import sqlite3
 import random
+import json
+from datetime import datetime
 from typing import List, Optional, Tuple, Dict
 from core.models import Student, Staff, TeacherReminder
 
@@ -103,6 +105,24 @@ def initialize_database() -> None:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS assignment_marks (
                 assignmentId INTEGER, admissionNo TEXT, marksObtained REAL, PRIMARY KEY(assignmentId, admissionNo)
+            )
+        """)
+
+        # 12. Academic Promotion History & Audit Trail Table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS promotion_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admissionNo TEXT,
+                studentName TEXT,
+                fromClass TEXT,
+                toClass TEXT,
+                totalScore REAL,
+                maxScore REAL,
+                percentage REAL,
+                resultStatus TEXT,
+                promotionDecision TEXT,
+                academicSession TEXT,
+                timestamp TEXT
             )
         """)
 
@@ -216,6 +236,111 @@ def bulk_promote_students(promotions: List[Tuple[str, str, str]]) -> int:
             )
         conn.commit()
         return len(promotions)
+
+
+def log_promotion_history(records: List[Dict]) -> None:
+    """
+    Inserts audit trail records into promotion_history.
+    Each record: {admissionNo, studentName, fromClass, toClass, totalScore, maxScore, percentage, resultStatus, promotionDecision, academicSession, timestamp}
+    """
+    if not records:
+        return
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        for r in records:
+            ts = r.get("timestamp") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute(
+                """
+                INSERT INTO promotion_history (
+                    admissionNo, studentName, fromClass, toClass, totalScore, maxScore,
+                    percentage, resultStatus, promotionDecision, academicSession, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    r.get("admissionNo", ""),
+                    r.get("studentName", ""),
+                    str(r.get("fromClass", "")),
+                    str(r.get("toClass", "")),
+                    float(r.get("totalScore", 0.0)),
+                    float(r.get("maxScore", 600.0)),
+                    float(r.get("percentage", 0.0)),
+                    r.get("resultStatus", "PASSED"),
+                    r.get("promotionDecision", "Promoted"),
+                    r.get("academicSession", "2025-2026"),
+                    ts
+                )
+            )
+        conn.commit()
+
+
+def get_promotion_history(admission_no: Optional[str] = None, session: Optional[str] = None, limit: int = 500) -> List[Dict]:
+    """Retrieves promotion audit trail records, optionally filtered by admissionNo or session."""
+    history = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        query = "SELECT * FROM promotion_history"
+        params = []
+        conditions = []
+        if admission_no:
+            conditions.append("admissionNo = ?")
+            params.append(admission_no)
+        if session:
+            conditions.append("academicSession = ?")
+            params.append(session)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += f" ORDER BY id DESC LIMIT {limit}"
+        cursor.execute(query, params)
+        for row in cursor.fetchall():
+            history.append({
+                "id": row["id"],
+                "admissionNo": row["admissionNo"],
+                "studentName": row["studentName"],
+                "fromClass": row["fromClass"],
+                "toClass": row["toClass"],
+                "totalScore": row["totalScore"],
+                "maxScore": row["maxScore"],
+                "percentage": row["percentage"],
+                "resultStatus": row["resultStatus"],
+                "promotionDecision": row["promotionDecision"],
+                "academicSession": row["academicSession"],
+                "timestamp": row["timestamp"]
+            })
+    return history
+
+
+def revert_student_promotion(admission_no: str, target_class: str, target_status: str) -> bool:
+    """Reverts a student's class and status (for administrative grade correction)."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE students SET className = ?, status = ? WHERE admissionNo = ?",
+            (target_class, target_status, admission_no)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def get_progression_policy() -> Dict:
+    """Returns the institutional automated progression policy settings."""
+    raw = get_app_data("progression_policy", "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return {
+        "auto_promotion_enabled": True,
+        "min_passing_pct": 50.0,
+        "min_subject_pct": 40.0,
+        "auto_graduate_alumni": True,
+        "academic_session": "2025-2026"
+    }
+
+
+def save_progression_policy(policy: Dict) -> None:
+    """Persists the automated progression policy."""
+    save_app_data("progression_policy", json.dumps(policy))
 
 
 # --- STAFF OPERATIONS ---

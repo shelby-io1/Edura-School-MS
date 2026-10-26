@@ -71,19 +71,21 @@
 * **In-Window Save Confirmation**: Instant status badges confirm timetable saves without intrusive alerts.
 * **Curriculum & Syllabus**: Module tracking syllabus completion percentages across academic terms.
 
-### 5. Examinations, Results & Report Cards
-* **Term Evaluations**: Record marks across 1st Term, Mid-Years, and Annual Final Examinations.
-* **Automatic Grade Calculation**: Computes percentage scores, letter grades ($A+$, $A$, $B$, $C$, $D$, $F$), and Pass/Fail statuses in real time.
-* **Official Report Cards**: In-window transcript viewer displaying student subject performance, aggregate marks, attendance summary, and remarks with printable layout.
+### 5. Examinations, Results & Subject-Wise Marks Entry
+* **Subject-Wise Scoring Matrix**: Enter marks directly across core subjects (**English**, **Mathematics**, **Science**, **Urdu**, **Computer**, **Islamiat**; 100 marks each, 600 total).
+* **Real-Time Dynamic Calculations**: Entering or updating any subject score instantly recalculates the student's Total Obtained Marks, Cumulative Percentage, Letter Grade ($A+, A, B, C, D, F$), and Academic Status in real time.
+* **Subject-Level Pass/Fail Governance**: Evaluates both minimum percentage per subject ($\ge 40\%$) and aggregate benchmark ($\ge 50\%$)—a student failing any single subject is flagged as **Failed** for academic remediation.
+* **Official Report Cards**: In-window transcript generator displaying a full subject-by-subject evaluation table, cumulative totals, overall grade, attendance summary, and remarks with printable layout.
 
-### 6. Year-End Bulk Student Promotion & Graduation
-* **Automated Institutional Progression**:
-  * **Classes 1–9**: Passing students ($\ge 50\%$) are automatically recommended for advancement to the next class level.
-  * **Class 10**: Passing students ($\ge 50\%$) graduate and are transitioned to `ALUMNI` status, preserving records in archives while clearing active classroom registers.
-  * **Failing Students ($< 50\%$)**: Flagged for retention in the same class for academic review.
-* **Interactive Administrative Overrides**: School administrators can review the entire candidate matrix and override any recommendation (Promote, Retain, or Mark Transferred) via table comboboxes prior to execution.
-* **Atomic Batch Execution**: Evaluates hundreds of students simultaneously and updates SQLite records within a single transaction.
-* **In-Card Confirmation Banner**: Clear post-execution audit summarizing total promoted, graduated, and retained students.
+### 6. Autonomous Year-End Progression & Audit Center (Approach C)
+* **Zero-Effort Automated Progression**:
+  * Saving marks for **Annual Final Exams** automatically triggers student promotion across the database without requiring manual execution.
+  * **Classes 1–9**: Passing students automatically advance to their next grade (`className` increments immediately in the database).
+  * **Class 10**: Passing seniors automatically graduate and transition to `ALUMNI` status.
+  * **Failing Students**: Automatically retained in their current class for academic remediation.
+* **Permanent Historical Audit Trail**: Every student's promotion or retention is logged atomically into SQLite (`promotion_history`) with scores, academic session, timestamp, and decision.
+* **Administrative Reversion & Grade Correction**: If a teacher modifies or corrects an exam score, administrators can easily revert any student's record directly from the Progression Audit Trail.
+* **Configurable Institutional Policy**: Easily tune the passing benchmark, minimum subject threshold, and senior graduation rules via Settings.
 
 ### 7. Daily Attendance Register
 * Daily attendance marking for students and staff with quick statuses (**Present**, **Absent**, **Late**, **Excused**).

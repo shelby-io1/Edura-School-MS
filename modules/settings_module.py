@@ -5,7 +5,7 @@ Features unified Save Settings action ensuring changes are only saved and applie
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QLineEdit, QComboBox, QFileDialog, QMessageBox,
-    QFormLayout, QScrollArea
+    QFormLayout, QScrollArea, QCheckBox, QDoubleSpinBox
 )
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtCore import Qt, Signal
@@ -113,7 +113,53 @@ class SettingsView(QWidget):
         ident_lay.addLayout(form_ident)
         lay.addWidget(ident_card)
 
-        # 3. Form Action Footer Card (Single Authoritative Save)
+        # 3. Academic Progression Policy Card (Approach C)
+        policy_card = ModernCard()
+        pol_lay = QVBoxLayout(policy_card)
+        pol_lay.setContentsMargins(28, 24, 28, 24)
+        pol_lay.setSpacing(16)
+
+        pol_lay.addWidget(FormSectionHeader(
+            "Academic Progression & Auto-Promotion Policy (Approach C)", "🎓",
+            "Autonomous student grade advancement, passing percentage thresholds, and session rollover rules"
+        ))
+
+        form_pol = QFormLayout()
+        form_pol.setSpacing(14)
+
+        self.auto_promo_check = QCheckBox("Enable Autonomous Year-End Progression upon Final Exam Submission")
+        self.auto_promo_check.setFont(theme.font_bold())
+        self.auto_promo_check.setStyleSheet(f"color: {theme.TEXT_PRIMARY}; font-size: 13px;")
+        form_pol.addRow("Progression Automation:", self.auto_promo_check)
+
+        self.min_passing_spin = QDoubleSpinBox()
+        self.min_passing_spin.setRange(33.0, 90.0)
+        self.min_passing_spin.setSingleStep(1.0)
+        self.min_passing_spin.setSuffix("% Cumulative")
+        self.min_passing_spin.setFixedHeight(38)
+        form_pol.addRow("Overall Passing Benchmark*:", self.min_passing_spin)
+
+        self.min_subject_spin = QDoubleSpinBox()
+        self.min_subject_spin.setRange(25.0, 75.0)
+        self.min_subject_spin.setSingleStep(1.0)
+        self.min_subject_spin.setSuffix("% Minimum per Subject")
+        self.min_subject_spin.setFixedHeight(38)
+        form_pol.addRow("Subject Passing Minimum*:", self.min_subject_spin)
+
+        self.auto_alumni_check = QCheckBox("Automatically transition passing Class 10 graduates to ALUMNI status")
+        self.auto_alumni_check.setFont(theme.font_regular())
+        self.auto_alumni_check.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        form_pol.addRow("Senior Graduation:", self.auto_alumni_check)
+
+        self.academic_session_input = QLineEdit()
+        self.academic_session_input.setFixedHeight(38)
+        self.academic_session_input.setPlaceholderText("e.g. 2025-2026")
+        form_pol.addRow("Academic Session Period*:", self.academic_session_input)
+
+        pol_lay.addLayout(form_pol)
+        lay.addWidget(policy_card)
+
+        # 4. Form Action Footer Card (Single Authoritative Save)
         action_card = ModernCard()
         act_lay = QHBoxLayout(action_card)
         act_lay.setContentsMargins(24, 18, 24, 18)
@@ -162,7 +208,16 @@ class SettingsView(QWidget):
 
         curr_logo = db.get_app_data("logoPath", "")
         self.logo_path_input.setText(curr_logo or "")
+
+        policy = db.get_progression_policy()
+        self.auto_promo_check.setChecked(bool(policy.get("auto_promotion_enabled", True)))
+        self.min_passing_spin.setValue(float(policy.get("min_passing_pct", 50.0)))
+        self.min_subject_spin.setValue(float(policy.get("min_subject_pct", 40.0)))
+        self.auto_alumni_check.setChecked(bool(policy.get("auto_graduate_alumni", True)))
+        self.academic_session_input.setText(str(policy.get("academic_session", "2025-2026")))
+
         self.status_feedback_lbl.setText("Current saved settings loaded.")
+        self.status_feedback_lbl.setStyleSheet(f"color: {theme.TEXT_SECONDARY};")
 
     def refresh_data(self):
         self.load_settings()
@@ -179,20 +234,24 @@ class SettingsView(QWidget):
         confirm = self.admin_confirm_input.text().strip()
 
         if not user:
-            QMessageBox.warning(self, "Validation Error", "Admin username cannot be empty.")
+            self.status_feedback_lbl.setText("❌ Admin username cannot be empty.")
+            self.status_feedback_lbl.setStyleSheet(f"color: {theme.DANGER}; font-weight: 700;")
             return
 
         if not pwd:
-            QMessageBox.warning(self, "Validation Error", "New password cannot be empty.")
+            self.status_feedback_lbl.setText("❌ New password cannot be empty.")
+            self.status_feedback_lbl.setStyleSheet(f"color: {theme.DANGER}; font-weight: 700;")
             return
 
         if pwd != confirm:
-            QMessageBox.warning(self, "Password Mismatch", "Passwords do not match. Please re-enter confirmation.")
+            self.status_feedback_lbl.setText("❌ Passwords do not match.")
+            self.status_feedback_lbl.setStyleSheet(f"color: {theme.DANGER}; font-weight: 700;")
             return
 
         name = self.school_name_input.text().strip()
         if not name:
-            QMessageBox.warning(self, "Validation Error", "School Name cannot be empty.")
+            self.status_feedback_lbl.setText("❌ School Name cannot be empty.")
+            self.status_feedback_lbl.setStyleSheet(f"color: {theme.DANGER}; font-weight: 700;")
             return
 
         # 1. Save Admin Credentials
@@ -204,11 +263,17 @@ class SettingsView(QWidget):
         cur = "PKR" if "PKR" in self.currency_combo.currentText() else "USD"
         db.save_app_data("currencyName", cur)
 
-        # 3. Apply changes across application shell
-        self.settings_updated.emit()
-        self.status_feedback_lbl.setText("All settings saved and applied successfully!")
+        # 3. Save Academic Progression Policy (Approach C)
+        policy = {
+            "auto_promotion_enabled": self.auto_promo_check.isChecked(),
+            "min_passing_pct": self.min_passing_spin.value(),
+            "min_subject_pct": self.min_subject_spin.value(),
+            "auto_graduate_alumni": self.auto_alumni_check.isChecked(),
+            "academic_session": self.academic_session_input.text().strip() or "2025-2026"
+        }
+        db.save_progression_policy(policy)
 
-        QMessageBox.information(
-            self, "Settings Saved",
-            "IT Support and system configuration settings have been saved and applied successfully!"
-        )
+        # 4. Apply changes across application shell
+        self.settings_updated.emit()
+        self.status_feedback_lbl.setText("✓ All settings and progression policies saved successfully!")
+        self.status_feedback_lbl.setStyleSheet(f"color: {theme.SECONDARY_DARK}; font-weight: 700;")
