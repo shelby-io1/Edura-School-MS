@@ -245,8 +245,10 @@ QProgressBar::chunk {{
 
 
 # Standard Typography
+FONT_FAMILY = "Segoe UI"
+
 def font_title():
-    f = QFont("Segoe UI", 20)
+    f = QFont(FONT_FAMILY, 20)
     f.setBold(True)
     return f
 

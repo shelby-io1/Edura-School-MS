@@ -53,13 +53,26 @@
 * Quick-action shortcuts for rapid admissions, attendance marking, and fee voucher generation.
 * Digital announcements and institutional reminders ticker.
 
-### 2. Student Information System (SIS)
-* **Admissions Form**: Comprehensive 4-tab registration card (Basic Info, Parent & Guardian Contacts, Academic Background, Medical & Emergency Notes) with student photograph upload.
+### 2. Student Information System (SIS) & 360° Profile
+* **Single-Click 360° Student Profile**: Clicking anywhere on a student data row in either the **Student Directory** or **Class Student Roster** instantly transitions to the comprehensive, full-page Student 360° Profile with zero popup dialogs:
+  * **Hero Header**: High-contrast candidate card with avatar badge, full name, enrollment status chip, admission number, grade/section badge, vital guardian contacts, `[ ✏️ Edit Record ]`, and intelligent contextual return navigation (`[ ← Return to Directory ]` or `[ ← Return to Class Roster ]`).
+  * **Tab 1 — Demographics & Vital Dossier**: 3-card dossier containing legal identity (B-Form/CNIC, age, blood group, previous school), residential communication coordinates, and institutional placement.
+  * **Tab 2 — Subject Marks & Transcripts**: Assessment KPI cards (Evaluated Count, Average %, Cumulative Grade, Status) alongside a complete multi-term subject marks evaluation matrix.
+  * **Tab 3 — Attendance Log & Real-Time Stats**: Live attendance KPIs (Total Marked Sessions, Present Days, Absent Days, Attendance Rate %) paired with a chronological session calendar log.
+  * **Tab 4 — Fee Ledger & Billing**: Financial KPIs (Total Billed, Total Paid, Outstanding Balance) paired with monthly fee voucher invoices, due dates, payment statuses, and clearance timestamps.
+  * **Tab 5 — Academic Promotion History**: Permanent progression audit trail populated directly from the `promotion_history` table detailing from/to grades, scores, percentages, and decisions.
+* **Admissions Form**: Comprehensive registration card (Basic Info, Parent & Guardian Contacts, Academic Background, Medical & Emergency Notes) with student photograph upload.
 * **Searchable Student Directory**: Search students by Admission Number, full name, or father's name with real-time class filters (Classes 1–10).
 * **Class Browser**: Dedicated rosters per grade level with quick access to student fee status, records, and guardian details.
 * **In-Page Record Editing**: Update student demographics, contact numbers, and status inline without leaving the directory view.
 
-### 3. Faculty & Staff Management
+### 3. Faculty & Staff Management & Faculty Portfolio
+* **Single-Click Staff Faculty Portfolio**: Clicking any staff data row in the **Faculty Directory** instantly opens the comprehensive, full-page Faculty Portfolio:
+  * **Hero Header**: Profile banner with faculty avatar, employee name, active status chip, staff ID code, department division chip, role designation, class incharge chip, `[ ✏️ Edit Record ]`, `[ 📚 Course Allocations ]`, and `[ ← Return to Faculty Directory ]`.
+  * **Tab 1 — Demographics & Employment Dossier**: 4-card dossier with personal identity, contact coordinates, verified academic degrees, pedagogical experience, official documents on file, and departmental placement.
+  * **Tab 2 — Teaching & Course Allocations**: Instructional workload KPI cards (Assigned Grade Levels, Active Curriculum Courses, Workload Load Standing) alongside an interactive course allocation matrix.
+  * **Tab 3 — Monthly Salary & Payroll History**: Remuneration KPI cards (Monthly Base Salary in PKR, Annual Projected CTC, Recent Status) alongside a chronological monthly payroll disbursement ledger.
+  * **Tab 4 — Professional Tasks & Institutional Reminders**: Operational duty cards paired with active administrative notices, deadlines, and task progress statuses.
 * **Staff Directory**: Complete registry of academic teachers and administrative personnel with automated employee ID generation (`STF-001`, `STF-002`, etc.).
 * **In-Page Registration**: Add faculty members with qualifications, designated department, joining date, and monthly salary.
 * **Teaching Subject Allocations**: Dedicated in-window allocation matrix to assign faculty members to specific subjects and grade levels.

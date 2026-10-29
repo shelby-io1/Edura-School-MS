@@ -77,6 +77,7 @@ class MetricCard(ModernCard):
     """Modern KPI metric widget with icon badge, bold stat number, and subtitle."""
     def __init__(self, title: str, value: str, icon_str: str, color_hex: str, bg_hex: str, trend_str: str = "", parent=None):
         super().__init__(parent)
+        self.setFixedHeight(90)
         lay = QHBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(16)

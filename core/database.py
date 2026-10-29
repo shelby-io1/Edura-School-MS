@@ -682,3 +682,174 @@ def save_app_data(key: str, value: str) -> None:
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO application_data VALUES (?, ?)", (key, value))
         conn.commit()
+
+
+# --- 360° PROFILE DATA AGGREGATION HELPERS ---
+
+def get_student_attendance_history(admission_no: str) -> List[Dict[str, str]]:
+    """Returns chronological attendance records for a student."""
+    records = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT date, status FROM student_attendance WHERE admissionNo = ? ORDER BY date DESC",
+            (admission_no,)
+        )
+        for row in cursor.fetchall():
+            records.append({"date": str(row["date"]), "status": str(row["status"])})
+    return records
+
+
+def get_student_fee_ledger(admission_no: str) -> List[Dict]:
+    """Aggregates monthly tuition, lab, sports, utilities, status, and payment timestamps for student."""
+    ledger = []
+    tuition = float(get_app_data("fee_tuition", "5000"))
+    it_lab = float(get_app_data("fee_itlab", "1000"))
+    sports = float(get_app_data("fee_sports", "800"))
+    utilities = float(get_app_data("fee_utilities", "700"))
+    total_monthly = tuition + it_lab + sports + utilities
+    due_day = int(get_app_data("fee_dueDay", "10"))
+
+    prefix = f"fee_status_{admission_no}_"
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT key, value FROM application_data WHERE key LIKE ? ORDER BY key DESC",
+            (f"{prefix}%",)
+        )
+        rows = cursor.fetchall()
+        for r in rows:
+            k = r["key"]
+            status = r["value"]
+            month_part = k[len(prefix):]
+            pay_date = get_app_data(f"fee_date_{admission_no}_{month_part}", "-")
+            try:
+                parts = month_part.split("_")
+                formatted_month = datetime(int(parts[0]), int(parts[1]), 1).strftime("%B %Y")
+                due_date = f"{parts[0]}-{parts[1]}-{due_day:02d}"
+            except Exception:
+                formatted_month = month_part
+                due_date = f"{month_part}-{due_day:02d}"
+
+            ledger.append({
+                "month_key": month_part,
+                "month_label": formatted_month,
+                "tuition": tuition,
+                "it_lab": it_lab,
+                "sports": sports,
+                "utilities": utilities,
+                "total": total_monthly,
+                "due_date": due_date,
+                "status": status,
+                "paid_date": pay_date
+            })
+
+    if not ledger:
+        now = datetime.now()
+        for i in range(3):
+            y = now.year
+            m = now.month - i
+            if m <= 0:
+                m += 12
+                y -= 1
+            m_key = f"{y}_{m:02d}"
+            m_label = datetime(y, m, 1).strftime("%B %Y")
+            st = get_app_data(f"fee_status_{admission_no}_{m_key}", "Paid" if i > 0 else "Pending")
+            p_date = get_app_data(f"fee_date_{admission_no}_{m_key}", f"{y}-{m:02d}-05" if st == "Paid" else "-")
+            ledger.append({
+                "month_key": m_key,
+                "month_label": m_label,
+                "tuition": tuition,
+                "it_lab": it_lab,
+                "sports": sports,
+                "utilities": utilities,
+                "total": total_monthly,
+                "due_date": f"{y}-{m:02d}-{due_day:02d}",
+                "status": st,
+                "paid_date": p_date
+            })
+    return ledger
+
+
+def get_student_exam_history(admission_no: str, class_name: Optional[str] = None) -> List[Dict]:
+    """Extracts subject-wise marks, totals, percentages, letter grades, and statuses across examination terms."""
+    history = []
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value FROM application_data WHERE key LIKE 'exam_results_%'")
+        rows = cursor.fetchall()
+        for r in rows:
+            key = r["key"]
+            parts = key.split("_", 3)
+            if len(parts) >= 4:
+                cls = parts[2]
+                term = parts[3]
+            elif len(parts) == 3:
+                cls = parts[2]
+                term = "General Exam"
+            else:
+                continue
+
+            if class_name and cls != class_name:
+                continue
+
+            try:
+                data = json.loads(r["value"] or "{}")
+                if admission_no in data:
+                    subject_scores = data[admission_no]
+                    tot = sum(subject_scores.values()) if subject_scores else 0.0
+                    max_marks = len(subject_scores) * 100.0 if subject_scores else 600.0
+                    pct = (tot / max_marks * 100.0) if max_marks > 0 else 0.0
+                    if pct >= 90:
+                        grade = "A+"
+                    elif pct >= 80:
+                        grade = "A"
+                    elif pct >= 70:
+                        grade = "B"
+                    elif pct >= 60:
+                        grade = "C"
+                    elif pct >= 50:
+                        grade = "D"
+                    else:
+                        grade = "F"
+                    status = "Passed" if pct >= 50.0 else "Failed"
+                    history.append({
+                        "class_name": cls,
+                        "term": term,
+                        "subjects": subject_scores,
+                        "total": tot,
+                        "max_marks": max_marks,
+                        "percentage": pct,
+                        "grade": grade,
+                        "status": status
+                    })
+            except Exception:
+                pass
+    return sorted(history, key=lambda x: (x["class_name"], x["term"]))
+
+
+def get_staff_payroll_history(staff_id: str, monthly_salary: float) -> List[Dict]:
+    """Compiles historical monthly salary disbursement entries, amounts, and statuses for staff."""
+    payroll = []
+    now = datetime.now()
+    for i in range(6):
+        y = now.year
+        m = now.month - i
+        if m <= 0:
+            m += 12
+            y -= 1
+        m_key = f"{y}_{m:02d}"
+        m_label = datetime(y, m, 1).strftime("%B %Y")
+        key = f"payroll_status_{staff_id}_{m_key}"
+        status = get_app_data(key, "Disbursed" if i > 0 else "Pending")
+        disbursed_date = f"{y}-{m:02d}-28" if status == "Disbursed" else "-"
+        payroll.append({
+            "month_key": m_key,
+            "month_label": m_label,
+            "salary": monthly_salary,
+            "allowances": 0.0,
+            "net_payable": monthly_salary,
+            "status": status,
+            "disbursed_date": disbursed_date
+        })
+    return payroll

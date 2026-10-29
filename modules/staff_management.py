@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QLineEdit,
     QComboBox, QDialog, QMessageBox, QDoubleSpinBox,
-    QScrollArea, QGridLayout, QStackedWidget
+    QScrollArea, QGridLayout, QStackedWidget, QTabWidget
 )
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtCore import Qt, Signal
@@ -16,9 +16,9 @@ import core.database as db
 from core.models import Staff
 from core.widgets import (
     ModernCard, StatusBadge, PageHeader, ModernSearchBar,
-    FormHeaderCard, FormSectionHeader, FormFieldGroup
+    FormHeaderCard, FormSectionHeader, FormFieldGroup, MetricCard
 )
-from datetime import date
+from datetime import date, datetime
 
 
 class StaffAdmissionForm(QWidget):
@@ -327,6 +327,10 @@ class StaffManagementView(QWidget):
         self.alloc_container_lay.setContentsMargins(28, 20, 28, 20)
         self.stack.addWidget(self.alloc_container)
 
+        # View 3: In-Page Faculty Portfolio & 360° Profile View
+        self.profile_widget = self.create_staff_profile_view()
+        self.stack.addWidget(self.profile_widget)
+
         self.stack.setCurrentIndex(0)
         self.refresh_data()
 
@@ -385,6 +389,8 @@ class StaffManagementView(QWidget):
         ])
         theme.format_table(self.table, 46)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setCursor(Qt.PointingHandCursor)
+        self.table.cellClicked.connect(self.on_staff_table_cell_clicked)
 
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -442,6 +448,7 @@ class StaffManagementView(QWidget):
                     continue
             filtered.append(st)
 
+        self.filtered_staff = filtered
         self.table.setRowCount(len(filtered))
         for row, st in enumerate(filtered):
             self.table.setItem(row, 0, QTableWidgetItem(st.staff_id))
@@ -456,12 +463,12 @@ class StaffManagementView(QWidget):
             self.table.setItem(row, 6, QTableWidgetItem(f"Rs. {st.salary:,.0f}"))
 
             btn_edit = theme.create_table_button("Edit", "primary")
-            btn_edit.clicked.connect(lambda _, s=st: self.open_edit_staff_dialog(s))
+            btn_edit.clicked.connect(lambda _, s=st: self.open_edit_staff_dialog(s, return_view="directory"))
 
             btns = [btn_edit]
             if st.staff_type == "Teaching Staff":
                 btn_assign = theme.create_table_button("Subjects", "outline")
-                btn_assign.clicked.connect(lambda _, s=st: self.open_teaching_assignments_dialog(s))
+                btn_assign.clicked.connect(lambda _, s=st: self.open_teaching_assignments_dialog(s, return_view="directory"))
                 btns.append(btn_assign)
 
             btn_del = theme.create_table_button("Delete", "danger")
@@ -470,15 +477,34 @@ class StaffManagementView(QWidget):
 
             self.table.setCellWidget(row, 7, theme.create_cell_widget(*btns))
 
-    def open_admission_form(self, staff: Optional[Staff] = None):
+    def on_staff_table_cell_clicked(self, row: int, col: int):
+        if col < 7:
+            staff_list = getattr(self, "filtered_staff", [])
+            if 0 <= row < len(staff_list):
+                self.open_staff_profile(staff_list[row])
+
+    def open_admission_form(self, staff: Optional[Staff] = None, return_view: str = "directory"):
         while self.form_container_lay.count():
             item = self.form_container_lay.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
         form = StaffAdmissionForm(parent=self.form_container, staff=staff)
-        form.saved.connect(lambda _: self.close_sub_view())
-        form.cancelled.connect(self.close_sub_view)
+
+        def on_saved(saved_staff):
+            if return_view == "profile":
+                self.open_staff_profile(saved_staff)
+            else:
+                self.close_sub_view()
+
+        def on_cancelled():
+            if return_view == "profile" and staff:
+                self.open_staff_profile(staff)
+            else:
+                self.close_sub_view()
+
+        form.saved.connect(on_saved)
+        form.cancelled.connect(on_cancelled)
         self.form_container_lay.addWidget(form)
 
         self.stack.setCurrentIndex(1)
@@ -488,12 +514,12 @@ class StaffManagementView(QWidget):
         self.refresh_data()
 
     def open_new_staff_dialog(self):
-        self.open_admission_form(staff=None)
+        self.open_admission_form(staff=None, return_view="directory")
 
-    def open_edit_staff_dialog(self, st: Staff):
-        self.open_admission_form(staff=st)
+    def open_edit_staff_dialog(self, st: Staff, return_view: str = "directory"):
+        self.open_admission_form(staff=st, return_view=return_view)
 
-    def open_teaching_assignments_dialog(self, st: Staff):
+    def open_teaching_assignments_dialog(self, st: Staff, return_view: str = "directory"):
         while self.alloc_container_lay.count():
             item = self.alloc_container_lay.takeAt(0)
             if item.widget():
@@ -503,6 +529,9 @@ class StaffManagementView(QWidget):
             f"Course Allocations — {st.get_full_name()} ({st.staff_id})",
             "Manage subjects, curricula, and assigned class grades taught by this faculty member"
         )
+        btn_back = theme.create_secondary_button("← Return")
+        btn_back.clicked.connect(lambda: self.open_staff_profile(st) if return_view == "profile" else self.close_sub_view())
+        header.add_action(btn_back)
         self.alloc_container_lay.addWidget(header)
 
         card = ModernCard()
@@ -576,3 +605,533 @@ class StaffManagementView(QWidget):
         if ret == QMessageBox.Yes:
             db.delete_staff(staff_id)
             self.refresh_data()
+
+    # --- 4. STAFF FACULTY PORTFOLIO & 360° PROFILE VIEW ---
+    def create_staff_profile_view(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        container = QWidget()
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(32, 24, 32, 28)
+        lay.setSpacing(18)
+
+        # 1. Hero Profile Header Card
+        self.profile_hero_card = ModernCard()
+        hero_lay = QHBoxLayout(self.profile_hero_card)
+        hero_lay.setContentsMargins(24, 20, 24, 20)
+        hero_lay.setSpacing(20)
+
+        # Avatar circle
+        avatar_box = QFrame()
+        avatar_box.setFixedSize(72, 72)
+        avatar_box.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme.PRIMARY_LIGHT};
+                border: 2px solid {theme.PRIMARY}33;
+                border-radius: 36px;
+            }}
+        """)
+        av_lay = QVBoxLayout(avatar_box)
+        av_lay.setContentsMargins(0, 0, 0, 0)
+        self.lbl_profile_avatar = QLabel("👨‍🏫")
+        self.lbl_profile_avatar.setAlignment(Qt.AlignCenter)
+        self.lbl_profile_avatar.setFont(QFont("Segoe UI Emoji", 30))
+        av_lay.addWidget(self.lbl_profile_avatar)
+        hero_lay.addWidget(avatar_box)
+
+        # Staff Main Details
+        info_vbox = QVBoxLayout()
+        info_vbox.setSpacing(6)
+
+        title_hbox = QHBoxLayout()
+        title_hbox.setSpacing(12)
+        self.lbl_profile_name = QLabel("Faculty Member Name")
+        self.lbl_profile_name.setFont(QFont(theme.FONT_FAMILY, 18, QFont.Bold))
+        self.lbl_profile_name.setStyleSheet("color: #0F172A;")
+        title_hbox.addWidget(self.lbl_profile_name)
+
+        self.badge_profile_status = StatusBadge("ACTIVE", "success")
+        title_hbox.addWidget(self.badge_profile_status)
+
+        self.badge_profile_id = StatusBadge("ID #T101", "neutral")
+        title_hbox.addWidget(self.badge_profile_id)
+        title_hbox.addStretch()
+        info_vbox.addLayout(title_hbox)
+
+        badges_hbox = QHBoxLayout()
+        badges_hbox.setSpacing(10)
+        self.badge_profile_dept = StatusBadge("Teaching Staff", "primary")
+        badges_hbox.addWidget(self.badge_profile_dept)
+
+        self.badge_profile_desig = StatusBadge("Teacher", "info")
+        badges_hbox.addWidget(self.badge_profile_desig)
+
+        self.badge_profile_incharge = StatusBadge("Incharge: None", "neutral")
+        badges_hbox.addWidget(self.badge_profile_incharge)
+
+        self.lbl_profile_meta = QLabel("Contact: 0300-1234567  •  Email: teacher@excellence.edu.pk  •  Joined: 2024-08-15")
+        self.lbl_profile_meta.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500;")
+        badges_hbox.addWidget(self.lbl_profile_meta)
+        badges_hbox.addStretch()
+        info_vbox.addLayout(badges_hbox)
+
+        hero_lay.addLayout(info_vbox, 1)
+
+        # Action Buttons on right
+        act_vbox = QVBoxLayout()
+        act_vbox.setSpacing(10)
+        act_vbox.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        btn_edit = theme.create_primary_button("✏️ Edit Record")
+        btn_edit.setFixedHeight(36)
+        btn_edit.clicked.connect(self.on_profile_edit_clicked)
+        act_vbox.addWidget(btn_edit)
+
+        self.btn_profile_courses = theme.create_secondary_button("📚 Course Allocations")
+        self.btn_profile_courses.setFixedHeight(36)
+        self.btn_profile_courses.clicked.connect(self.on_profile_courses_clicked)
+        act_vbox.addWidget(self.btn_profile_courses)
+
+        self.btn_profile_return = theme.create_secondary_button("← Return")
+        self.btn_profile_return.setFixedHeight(36)
+        self.btn_profile_return.clicked.connect(self.close_staff_profile)
+        act_vbox.addWidget(self.btn_profile_return)
+
+        hero_lay.addLayout(act_vbox)
+        lay.addWidget(self.profile_hero_card)
+
+        # 2. Modern 4-Tab Faculty Portfolio
+        self.staff_tabs = QTabWidget()
+        self.staff_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: none;
+                background: transparent;
+            }}
+            QTabBar::tab {{
+                background: {theme.SURFACE};
+                color: {theme.TEXT_SECONDARY};
+                font-family: {theme.FONT_FAMILY};
+                font-weight: 600;
+                font-size: 13px;
+                padding: 10px 22px;
+                margin-right: 8px;
+                border-radius: 8px;
+                border: 1px solid {theme.BORDER_COLOR};
+            }}
+            QTabBar::tab:selected {{
+                background: {theme.PRIMARY};
+                color: #FFFFFF;
+                border: 1px solid {theme.PRIMARY};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: #F1F5F9;
+                color: {theme.TEXT_PRIMARY};
+            }}
+        """)
+
+        # Add 4 tabs
+        self.tab_dossier = self.create_staff_dossier_tab()
+        self.staff_tabs.addTab(self.tab_dossier, "👤 Demographics && Dossier")
+
+        self.tab_assignments = self.create_staff_assignments_tab()
+        self.staff_tabs.addTab(self.tab_assignments, "📚 Teaching Allocations")
+
+        self.tab_payroll = self.create_staff_payroll_tab()
+        self.staff_tabs.addTab(self.tab_payroll, "💰 Salary && Payroll History")
+
+        self.tab_reminders = self.create_staff_reminders_tab()
+        self.staff_tabs.addTab(self.tab_reminders, "📌 Tasks && Reminders")
+
+        lay.addWidget(self.staff_tabs)
+
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+        return widget
+
+    def create_staff_dossier_tab(self) -> QWidget:
+        widget = QWidget()
+        self.dossier_content_layout = QVBoxLayout(widget)
+        self.dossier_content_layout.setContentsMargins(0, 14, 0, 0)
+        self.dossier_content_layout.setSpacing(16)
+        return widget
+
+    def create_staff_assignments_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_alloc_classes = MetricCard("Assigned Grade Levels", "0", "🏫", theme.INFO, theme.INFO_LIGHT)
+        self.metric_alloc_courses = MetricCard("Active Curriculum Courses", "0", "📚", theme.PRIMARY, theme.PRIMARY_LIGHT)
+        self.metric_alloc_score = MetricCard("Teaching Load Standing", "Optimal", "⚡", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        m_row.addWidget(self.metric_alloc_classes)
+        m_row.addWidget(self.metric_alloc_courses)
+        m_row.addWidget(self.metric_alloc_score)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        t_header = QHBoxLayout()
+        header_lbl = QLabel("Instructional Course & Grade Allocations")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        t_header.addWidget(header_lbl)
+        t_header.addStretch()
+
+        btn_manage = theme.create_secondary_button("⚙️ Manage Course Assignments")
+        btn_manage.clicked.connect(self.on_profile_courses_clicked)
+        t_header.addWidget(btn_manage)
+        c_lay.addLayout(t_header)
+
+        self.profile_alloc_table = QTableWidget(0, 3)
+        self.profile_alloc_table.setHorizontalHeaderLabels(["Class Grade Level", "Curriculum Subject", "Instructional Standing"])
+        theme.format_table(self.profile_alloc_table, 42)
+        self.profile_alloc_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        al_hdr = self.profile_alloc_table.horizontalHeader()
+        al_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        al_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        al_hdr.setSectionResizeMode(2, QHeaderView.Interactive)
+        self.profile_alloc_table.setColumnWidth(0, 180)
+        self.profile_alloc_table.setColumnWidth(2, 200)
+        c_lay.addWidget(self.profile_alloc_table)
+
+        self.lbl_alloc_empty = QLabel("No courses or subjects allocated yet for this faculty member.")
+        self.lbl_alloc_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_alloc_empty.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; padding: 24px;")
+        c_lay.addWidget(self.lbl_alloc_empty)
+
+        lay.addWidget(card)
+        return widget
+
+    def create_staff_payroll_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_pay_salary = MetricCard("Monthly Base Salary", "Rs. 0", "💰", theme.PRIMARY, theme.PRIMARY_LIGHT)
+        self.metric_pay_annual = MetricCard("Annual Base Compensation", "Rs. 0", "💼", theme.INFO, theme.INFO_LIGHT)
+        self.metric_pay_status = MetricCard("Recent Payroll Status", "Disbursed", "✅", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        m_row.addWidget(self.metric_pay_salary)
+        m_row.addWidget(self.metric_pay_annual)
+        m_row.addWidget(self.metric_pay_status)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Historical Monthly Compensation & Payroll Records")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_payroll_table = QTableWidget(0, 6)
+        self.profile_payroll_table.setHorizontalHeaderLabels([
+            "Payroll Month", "Base Salary (PKR)", "Allowances", "Net Disbursed", "Payment Status", "Disbursement Date"
+        ])
+        theme.format_table(self.profile_payroll_table, 42)
+        self.profile_payroll_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        py_hdr = self.profile_payroll_table.horizontalHeader()
+        py_hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 6):
+            py_hdr.setSectionResizeMode(i, QHeaderView.Interactive)
+            self.profile_payroll_table.setColumnWidth(i, 130 if i < 4 else 145)
+        c_lay.addWidget(self.profile_payroll_table)
+
+        lay.addWidget(card)
+        return widget
+
+    def create_staff_reminders_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_rem_total = MetricCard("Assigned Tasks & Notices", "0", "📌", theme.PRIMARY, theme.PRIMARY_LIGHT)
+        self.metric_rem_pending = MetricCard("Pending Deadlines", "0", "⏳", theme.WARNING, theme.WARNING_LIGHT)
+        self.metric_rem_done = MetricCard("Completed Actions", "0", "✅", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        m_row.addWidget(self.metric_rem_total)
+        m_row.addWidget(self.metric_rem_pending)
+        m_row.addWidget(self.metric_rem_done)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Professional Duties, Reminders & Institutional Notices")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_task_table = QTableWidget(0, 6)
+        self.profile_task_table.setHorizontalHeaderLabels([
+            "Task / Notice Title", "Description", "Due Date", "Priority", "Category", "Status"
+        ])
+        theme.format_table(self.profile_task_table, 42)
+        self.profile_task_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        r_hdr = self.profile_task_table.horizontalHeader()
+        r_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        r_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        r_hdr.setSectionResizeMode(2, QHeaderView.Interactive)
+        r_hdr.setSectionResizeMode(3, QHeaderView.Interactive)
+        r_hdr.setSectionResizeMode(4, QHeaderView.Interactive)
+        r_hdr.setSectionResizeMode(5, QHeaderView.Interactive)
+        self.profile_task_table.setColumnWidth(0, 180)
+        self.profile_task_table.setColumnWidth(2, 110)
+        self.profile_task_table.setColumnWidth(3, 100)
+        self.profile_task_table.setColumnWidth(4, 115)
+        self.profile_task_table.setColumnWidth(5, 115)
+        c_lay.addWidget(self.profile_task_table)
+
+        self.lbl_rem_empty = QLabel("No pending tasks, reminders or institutional notices assigned to this staff member.")
+        self.lbl_rem_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_rem_empty.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; padding: 24px;")
+        c_lay.addWidget(self.lbl_rem_empty)
+
+        lay.addWidget(card)
+        return widget
+
+    # --- 5. STAFF PROFILE POPULATION & NAVIGATION ---
+    def open_staff_profile(self, st: Staff):
+        self.current_profile_staff = st
+
+        # Hero header update
+        self.lbl_profile_name.setText(st.get_full_name())
+        self.badge_profile_status.setText(st.status.upper() if st.status else "ACTIVE")
+        self.badge_profile_status.set_variant(
+            "success" if st.status == "ACTIVE" else "neutral"
+        )
+        self.badge_profile_id.setText(f"ID #{st.staff_id}")
+        self.badge_profile_dept.setText(st.staff_type)
+        self.badge_profile_desig.setText(st.designation)
+
+        if st.assigned_class:
+            self.badge_profile_incharge.setText(f"Incharge: Class {st.assigned_class}")
+            self.badge_profile_incharge.show()
+        else:
+            self.badge_profile_incharge.setText("Incharge: None")
+            self.badge_profile_incharge.show()
+
+        self.lbl_profile_meta.setText(
+            f"Contact: {st.contact or 'N/A'}  •  Email: {st.email or 'N/A'}  •  Joined: {st.join_date or 'N/A'}"
+        )
+
+        if st.staff_type == "Teaching Staff":
+            self.btn_profile_courses.show()
+        else:
+            self.btn_profile_courses.hide()
+
+        self.btn_profile_return.setText("← Return to Faculty Directory")
+
+        # Populate tabs
+        self.populate_staff_dossier(st)
+        self.populate_staff_assignments(st)
+        self.populate_staff_payroll(st)
+        self.populate_staff_reminders(st)
+
+        self.staff_tabs.setCurrentIndex(0)
+        self.stack.setCurrentIndex(3)
+
+    def close_staff_profile(self):
+        self.stack.setCurrentIndex(0)
+        self.refresh_data()
+
+    def on_profile_edit_clicked(self):
+        if hasattr(self, "current_profile_staff") and self.current_profile_staff:
+            self.open_edit_staff_dialog(self.current_profile_staff, return_view="profile")
+
+    def on_profile_courses_clicked(self):
+        if hasattr(self, "current_profile_staff") and self.current_profile_staff:
+            self.open_teaching_assignments_dialog(self.current_profile_staff, return_view="profile")
+
+    def _make_info_widget(self, label: str, value: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lbl_title = QLabel(label.upper())
+        lbl_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;")
+        lbl_val = QLabel(str(value) if value and str(value).strip() else "—")
+        lbl_val.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 600;")
+        lbl_val.setWordWrap(True)
+        lay.addWidget(lbl_title)
+        lay.addWidget(lbl_val)
+        return w
+
+    def populate_staff_dossier(self, st: Staff):
+        while self.dossier_content_layout.count():
+            item = self.dossier_content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Card 1: Identity & Vital Information
+        card1 = ModernCard()
+        c1_lay = QVBoxLayout(card1)
+        c1_lay.setContentsMargins(22, 20, 22, 20)
+        c1_lay.setSpacing(16)
+        c1_lay.addWidget(FormSectionHeader(
+            "Employee Personal & Identity Information", "👤",
+            "Legal identity, employee registration code, and official parentage"
+        ))
+        g1 = QGridLayout()
+        g1.setHorizontalSpacing(24)
+        g1.setVerticalSpacing(14)
+        g1.addWidget(self._make_info_widget("Staff / Employee ID", st.staff_id), 0, 0)
+        g1.addWidget(self._make_info_widget("Full Legal Name", st.get_full_name()), 0, 1)
+        g1.addWidget(self._make_info_widget("Father / Guardian Name", st.father_name), 0, 2)
+        g1.addWidget(self._make_info_widget("Blood Group", st.blood_group), 1, 0)
+        g1.addWidget(self._make_info_widget("Appointment Date", st.join_date), 1, 1)
+        g1.addWidget(self._make_info_widget("Employment Status", st.status), 1, 2)
+        c1_lay.addLayout(g1)
+        self.dossier_content_layout.addWidget(card1)
+
+        # Card 2: Contact & Residential Coordinates
+        card2 = ModernCard()
+        c2_lay = QVBoxLayout(card2)
+        c2_lay.setContentsMargins(22, 20, 22, 20)
+        c2_lay.setSpacing(16)
+        c2_lay.addWidget(FormSectionHeader(
+            "Communication & Residential Coordinates", "📞",
+            "Primary phone contact, official email address, and legal residential address"
+        ))
+        g2 = QGridLayout()
+        g2.setHorizontalSpacing(24)
+        g2.setVerticalSpacing(14)
+        g2.addWidget(self._make_info_widget("Primary Mobile Contact", st.contact), 0, 0)
+        g2.addWidget(self._make_info_widget("Official Email Address", st.email), 0, 1)
+        g2.addWidget(self._make_info_widget("Residential Address", st.address), 1, 0, 1, 2)
+        c2_lay.addLayout(g2)
+        self.dossier_content_layout.addWidget(card2)
+
+        # Card 3: Qualifications & Professional Experience
+        card3 = ModernCard()
+        c3_lay = QVBoxLayout(card3)
+        c3_lay.setContentsMargins(22, 20, 22, 20)
+        c3_lay.setSpacing(16)
+        c3_lay.addWidget(FormSectionHeader(
+            "Academic Qualifications & Teaching Credentials", "🎓",
+            "Highest degree, verified pedagogical experience, and official dossier notes"
+        ))
+        g3 = QGridLayout()
+        g3.setHorizontalSpacing(24)
+        g3.setVerticalSpacing(14)
+        g3.addWidget(self._make_info_widget("Highest Qualification", st.qualification or "Master of Science / Arts"), 0, 0)
+        g3.addWidget(self._make_info_widget("Verified Experience", st.experience or "Pedagogical Experience on record"), 0, 1)
+        g3.addWidget(self._make_info_widget("Verified Documents on File", st.documents or "National ID Copy, Verified Degrees"), 1, 0)
+        g3.addWidget(self._make_info_widget("Administrative Dossier Notes", st.notes or "Faculty member in active institutional standing"), 1, 1)
+        c3_lay.addLayout(g3)
+        self.dossier_content_layout.addWidget(card3)
+
+        # Card 4: Institutional Role & Departmental Placement
+        card4 = ModernCard()
+        c4_lay = QVBoxLayout(card4)
+        c4_lay.setContentsMargins(22, 20, 22, 20)
+        c4_lay.setSpacing(16)
+        c4_lay.addWidget(FormSectionHeader(
+            "Institutional Placement & Compensation", "💼",
+            "Department division, official role, assigned class teacher, and monthly remuneration"
+        ))
+        g4 = QGridLayout()
+        g4.setHorizontalSpacing(24)
+        g4.setVerticalSpacing(14)
+        g4.addWidget(self._make_info_widget("Department Division", st.staff_type), 0, 0)
+        g4.addWidget(self._make_info_widget("Official Designation", st.designation), 0, 1)
+        g4.addWidget(self._make_info_widget("Assigned Class Incharge", f"Class {st.assigned_class}" if st.assigned_class else "None"), 1, 0)
+        g4.addWidget(self._make_info_widget("Base Remuneration (Monthly)", f"Rs. {st.salary:,.0f}"), 1, 1)
+        c4_lay.addLayout(g4)
+        self.dossier_content_layout.addWidget(card4)
+
+    def populate_staff_assignments(self, st: Staff):
+        assignments = db.get_teaching_assignments(st.staff_id)
+        classes_set = set(c for c, _ in assignments)
+
+        self.metric_alloc_classes.set_value(f"{len(classes_set)} Grades")
+        self.metric_alloc_courses.set_value(f"{len(assignments)} Courses")
+        load = "Balanced" if len(assignments) <= 6 else "Intensive"
+        self.metric_alloc_score.set_value(load)
+
+        if assignments:
+            self.lbl_alloc_empty.hide()
+            self.profile_alloc_table.show()
+            self.profile_alloc_table.setRowCount(len(assignments))
+            for row, (c, s) in enumerate(assignments):
+                self.profile_alloc_table.setItem(row, 0, QTableWidgetItem(f"Class {c}"))
+                self.profile_alloc_table.setItem(row, 1, QTableWidgetItem(s))
+                b_active = StatusBadge("ACTIVE ALLOCATION", "success")
+                self.profile_alloc_table.setCellWidget(row, 2, theme.create_cell_widget(b_active))
+        else:
+            self.profile_alloc_table.setRowCount(0)
+            self.profile_alloc_table.hide()
+            self.lbl_alloc_empty.show()
+
+    def populate_staff_payroll(self, st: Staff):
+        payroll = db.get_staff_payroll_history(st.staff_id, st.salary)
+        self.metric_pay_salary.set_value(f"Rs. {st.salary:,.0f}")
+        self.metric_pay_annual.set_value(f"Rs. {st.salary * 12:,.0f}")
+        recent_status = payroll[0]["status"] if payroll else "Disbursed"
+        self.metric_pay_status.set_value(recent_status)
+
+        self.profile_payroll_table.setRowCount(len(payroll))
+        for row, p in enumerate(payroll):
+            self.profile_payroll_table.setItem(row, 0, QTableWidgetItem(p["month_label"]))
+            self.profile_payroll_table.setItem(row, 1, QTableWidgetItem(f"Rs. {p['salary']:,.0f}"))
+            self.profile_payroll_table.setItem(row, 2, QTableWidgetItem(f"Rs. {p['allowances']:,.0f}"))
+            self.profile_payroll_table.setItem(row, 3, QTableWidgetItem(f"Rs. {p['net_payable']:,.0f}"))
+
+            badge = StatusBadge.from_status(p["status"])
+            self.profile_payroll_table.setCellWidget(row, 4, theme.create_cell_widget(badge))
+            self.profile_payroll_table.setItem(row, 5, QTableWidgetItem(p["disbursed_date"]))
+
+    def populate_staff_reminders(self, st: Staff):
+        reminders = db.get_reminders(staff_id=st.staff_id)
+        tot = len(reminders)
+        pending = sum(1 for r in reminders if r.status != "Completed")
+        done = sum(1 for r in reminders if r.status == "Completed")
+
+        self.metric_rem_total.set_value(str(tot))
+        self.metric_rem_pending.set_value(str(pending))
+        self.metric_rem_done.set_value(str(done))
+
+        if reminders:
+            self.lbl_rem_empty.hide()
+            self.profile_task_table.show()
+            self.profile_task_table.setRowCount(len(reminders))
+            for row, r in enumerate(reminders):
+                self.profile_task_table.setItem(row, 0, QTableWidgetItem(r.title))
+                self.profile_task_table.setItem(row, 1, QTableWidgetItem(r.description))
+                self.profile_task_table.setItem(row, 2, QTableWidgetItem(r.due_date))
+
+                p_badge = StatusBadge.from_status(r.priority)
+                self.profile_task_table.setCellWidget(row, 3, theme.create_cell_widget(p_badge))
+
+                self.profile_task_table.setItem(row, 4, QTableWidgetItem(r.reminder_type))
+
+                s_badge = StatusBadge.from_status(r.status)
+                self.profile_task_table.setCellWidget(row, 5, theme.create_cell_widget(s_badge))
+        else:
+            self.profile_task_table.setRowCount(0)
+            self.profile_task_table.hide()
+            self.lbl_rem_empty.show()
+

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QLineEdit,
     QComboBox, QDialog, QMessageBox, QStackedWidget,
-    QScrollArea, QGridLayout
+    QScrollArea, QGridLayout, QTabWidget
 )
 from PySide6.QtGui import QFont, QColor
 from PySide6.QtCore import Qt, Signal
@@ -16,9 +16,9 @@ import core.database as db
 from core.models import Student
 from core.widgets import (
     ModernCard, StatusBadge, PageHeader, ModernSearchBar,
-    FormHeaderCard, FormSectionHeader, FormFieldGroup
+    FormHeaderCard, FormSectionHeader, FormFieldGroup, MetricCard
 )
-from datetime import date
+from datetime import date, datetime
 
 
 
@@ -390,6 +390,9 @@ class StudentManagementView(QWidget):
         self.directory_widget = self.create_directory_view()
         self.sub_stack.addWidget(self.directory_widget)
 
+        self.student_profile_widget = self.create_student_profile_view()
+        self.sub_stack.addWidget(self.student_profile_widget)
+
         self.sub_stack.setCurrentIndex(0)
 
     def set_sub_view(self, sub_route: str):
@@ -507,8 +510,25 @@ class StudentManagementView(QWidget):
                         child.widget().deleteLater()
 
         form = StudentAdmissionForm(parent=self.admission_container, student=student, is_dialog_mode=False)
-        form.saved.connect(lambda _: self.open_directory())
-        form.cancelled.connect(self.open_directory)
+
+        def on_saved(saved_student):
+            if return_view == "profile":
+                self.open_student_profile(saved_student, return_view=getattr(self, "profile_return_view", "directory"))
+            elif return_view == "class_students":
+                self.open_class_roster(saved_student.class_name if saved_student else "1")
+            else:
+                self.open_directory()
+
+        def on_cancelled():
+            if return_view == "profile" and student:
+                self.open_student_profile(student, return_view=getattr(self, "profile_return_view", "directory"))
+            elif return_view == "class_students":
+                self.open_class_roster(student.class_name if student else "1")
+            else:
+                self.open_directory()
+
+        form.saved.connect(on_saved)
+        form.cancelled.connect(on_cancelled)
         self.admission_container_lay.addWidget(form)
 
         self.sub_stack.setCurrentIndex(1)
@@ -611,6 +631,8 @@ class StudentManagementView(QWidget):
         self.class_table.setHorizontalHeaderLabels(["Adm #", "Student Name", "Father Name", "Contact", "Age", "Status", "Actions"])
         theme.format_table(self.class_table, 46)
         self.class_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.class_table.setCursor(Qt.PointingHandCursor)
+        self.class_table.cellClicked.connect(self.on_class_table_cell_clicked)
 
         c_hdr = self.class_table.horizontalHeader()
         c_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -635,6 +657,7 @@ class StudentManagementView(QWidget):
         self.current_roster_class = class_name
         self.class_header.lbl_title.setText(f"Class {class_name} Student Roster")
         students = [s for s in db.get_all_students() if s.class_name == class_name]
+        self.current_class_students = students
 
         self.class_table.setRowCount(len(students))
         for row, s in enumerate(students):
@@ -650,7 +673,7 @@ class StudentManagementView(QWidget):
             self.class_table.setCellWidget(row, 5, theme.create_cell_widget(badge))
 
             btn_edit = theme.create_table_button("Edit", "primary")
-            btn_edit.clicked.connect(lambda _, st=s: self.edit_student(st))
+            btn_edit.clicked.connect(lambda _, st=s: self.edit_student(st, return_view="class_students"))
 
             btn_del = theme.create_table_button("Delete", "danger")
             btn_del.clicked.connect(lambda _, adm=s.admission_no: self.delete_student(adm))
@@ -658,6 +681,12 @@ class StudentManagementView(QWidget):
             self.class_table.setCellWidget(row, 6, theme.create_cell_widget(btn_edit, btn_del))
 
         self.sub_stack.setCurrentIndex(3)
+
+    def on_class_table_cell_clicked(self, row: int, col: int):
+        if col < 6:
+            students = getattr(self, "current_class_students", [])
+            if 0 <= row < len(students):
+                self.open_student_profile(students[row], return_view="class_students")
 
     def generate_bulk_fee_challans(self):
         cls = getattr(self, "current_roster_class", "1")
@@ -677,7 +706,7 @@ class StudentManagementView(QWidget):
 
         header = PageHeader(
             "Student Archives & Complete Directory",
-            "Live search across student database with instant bio-data editing and records management"
+            "Live search across student database with instant 360° dossier view and records management"
         )
         layout.addWidget(header)
 
@@ -712,6 +741,8 @@ class StudentManagementView(QWidget):
         self.dir_table.setHorizontalHeaderLabels(["Adm #", "Full Name", "Father Name", "Class", "Contact", "Status", "Actions"])
         theme.format_table(self.dir_table, 46)
         self.dir_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.dir_table.setCursor(Qt.PointingHandCursor)
+        self.dir_table.cellClicked.connect(self.on_dir_table_cell_clicked)
 
         d_hdr = self.dir_table.horizontalHeader()
         d_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
@@ -757,6 +788,7 @@ class StudentManagementView(QWidget):
                     continue
             filtered.append(s)
 
+        self.filtered_directory_students = filtered
         self.dir_table.setRowCount(len(filtered))
         for row, s in enumerate(filtered):
             item_adm = QTableWidgetItem(s.admission_no)
@@ -771,15 +803,21 @@ class StudentManagementView(QWidget):
             self.dir_table.setCellWidget(row, 5, theme.create_cell_widget(badge))
 
             btn_edit = theme.create_table_button("Edit", "primary")
-            btn_edit.clicked.connect(lambda _, st=s: self.edit_student(st))
+            btn_edit.clicked.connect(lambda _, st=s: self.edit_student(st, return_view="directory"))
 
             btn_del = theme.create_table_button("Delete", "danger")
             btn_del.clicked.connect(lambda _, adm=s.admission_no: self.delete_student(adm))
 
             self.dir_table.setCellWidget(row, 6, theme.create_cell_widget(btn_edit, btn_del))
 
-    def edit_student(self, student: Student):
-        self.open_admission_form(student=student, return_view="directory")
+    def on_dir_table_cell_clicked(self, row: int, col: int):
+        if col < 6:
+            filtered = getattr(self, "filtered_directory_students", [])
+            if 0 <= row < len(filtered):
+                self.open_student_profile(filtered[row], return_view="directory")
+
+    def edit_student(self, student: Student, return_view: str = "directory"):
+        self.open_admission_form(student=student, return_view=return_view)
 
     def delete_student(self, admission_no: str):
         ret = QMessageBox.question(
@@ -790,3 +828,609 @@ class StudentManagementView(QWidget):
         if ret == QMessageBox.Yes:
             db.delete_student(admission_no)
             self.open_directory()
+
+    # --- 6. STUDENT 360° PROFILE VIEW ---
+    def create_student_profile_view(self) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        container = QWidget()
+        lay = QVBoxLayout(container)
+        lay.setContentsMargins(32, 24, 32, 28)
+        lay.setSpacing(18)
+
+        # 1. Hero Profile Header Card
+        self.profile_hero_card = ModernCard()
+        hero_lay = QHBoxLayout(self.profile_hero_card)
+        hero_lay.setContentsMargins(24, 20, 24, 20)
+        hero_lay.setSpacing(20)
+
+        # Avatar circle
+        avatar_box = QFrame()
+        avatar_box.setFixedSize(72, 72)
+        avatar_box.setStyleSheet(f"""
+            QFrame {{
+                background-color: {theme.PRIMARY_LIGHT};
+                border: 2px solid {theme.PRIMARY}33;
+                border-radius: 36px;
+            }}
+        """)
+        av_lay = QVBoxLayout(avatar_box)
+        av_lay.setContentsMargins(0, 0, 0, 0)
+        self.lbl_profile_avatar = QLabel("🎓")
+        self.lbl_profile_avatar.setAlignment(Qt.AlignCenter)
+        self.lbl_profile_avatar.setFont(QFont("Segoe UI Emoji", 30))
+        av_lay.addWidget(self.lbl_profile_avatar)
+        hero_lay.addWidget(avatar_box)
+
+        # Student Main Details
+        info_vbox = QVBoxLayout()
+        info_vbox.setSpacing(6)
+
+        title_hbox = QHBoxLayout()
+        title_hbox.setSpacing(12)
+        self.lbl_profile_name = QLabel("Student Full Name")
+        self.lbl_profile_name.setFont(QFont(theme.FONT_FAMILY, 18, QFont.Bold))
+        self.lbl_profile_name.setStyleSheet("color: #0F172A;")
+        title_hbox.addWidget(self.lbl_profile_name)
+
+        self.badge_profile_status = StatusBadge("ENROLLED", "success")
+        title_hbox.addWidget(self.badge_profile_status)
+
+        self.badge_profile_adm = StatusBadge("ADM #1001", "neutral")
+        title_hbox.addWidget(self.badge_profile_adm)
+        title_hbox.addStretch()
+        info_vbox.addLayout(title_hbox)
+
+        badges_hbox = QHBoxLayout()
+        badges_hbox.setSpacing(10)
+        self.badge_profile_class = StatusBadge("Class 1", "info")
+        badges_hbox.addWidget(self.badge_profile_class)
+
+        self.lbl_profile_meta = QLabel("Father: Tariq Mehmood  •  Contact: 0300-1234567  •  B-Form: 37405-1234567-1")
+        self.lbl_profile_meta.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500;")
+        badges_hbox.addWidget(self.lbl_profile_meta)
+        badges_hbox.addStretch()
+        info_vbox.addLayout(badges_hbox)
+
+        hero_lay.addLayout(info_vbox, 1)
+
+        # Action Buttons on right
+        act_vbox = QVBoxLayout()
+        act_vbox.setSpacing(10)
+        act_vbox.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
+        btn_edit = theme.create_primary_button("✏️ Edit Record")
+        btn_edit.setFixedHeight(36)
+        btn_edit.clicked.connect(self.on_profile_edit_clicked)
+        act_vbox.addWidget(btn_edit)
+
+        self.btn_profile_return = theme.create_secondary_button("← Return")
+        self.btn_profile_return.setFixedHeight(36)
+        self.btn_profile_return.clicked.connect(self.close_student_profile)
+        act_vbox.addWidget(self.btn_profile_return)
+
+        hero_lay.addLayout(act_vbox)
+        lay.addWidget(self.profile_hero_card)
+
+        # 2. Modern 5-Tab Dossier
+        self.student_tabs = QTabWidget()
+        self.student_tabs.setStyleSheet(f"""
+            QTabWidget::pane {{
+                border: none;
+                background: transparent;
+            }}
+            QTabBar::tab {{
+                background: {theme.SURFACE};
+                color: {theme.TEXT_SECONDARY};
+                font-family: {theme.FONT_FAMILY};
+                font-weight: 600;
+                font-size: 13px;
+                padding: 10px 22px;
+                margin-right: 8px;
+                border-radius: 8px;
+                border: 1px solid {theme.BORDER_COLOR};
+            }}
+            QTabBar::tab:selected {{
+                background: {theme.PRIMARY};
+                color: #FFFFFF;
+                border: 1px solid {theme.PRIMARY};
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: #F1F5F9;
+                color: {theme.TEXT_PRIMARY};
+            }}
+        """)
+
+        # Add 5 tabs
+        self.tab_dossier = self.create_student_dossier_tab()
+        self.student_tabs.addTab(self.tab_dossier, "👤 Demographics && Dossier")
+
+        self.tab_exams = self.create_student_exams_tab()
+        self.student_tabs.addTab(self.tab_exams, "📊 Subject Marks && Transcripts")
+
+        self.tab_attendance = self.create_student_attendance_tab()
+        self.student_tabs.addTab(self.tab_attendance, "📅 Attendance Log && Stats")
+
+        self.tab_fees = self.create_student_fees_tab()
+        self.student_tabs.addTab(self.tab_fees, "💳 Fee Ledger && Billing")
+
+        self.tab_progression = self.create_student_progression_tab()
+        self.student_tabs.addTab(self.tab_progression, "🎓 Promotion History")
+
+        lay.addWidget(self.student_tabs)
+
+        scroll.setWidget(container)
+        layout.addWidget(scroll)
+        return widget
+
+    def create_student_dossier_tab(self) -> QWidget:
+        widget = QWidget()
+        self.dossier_content_layout = QVBoxLayout(widget)
+        self.dossier_content_layout.setContentsMargins(0, 14, 0, 0)
+        self.dossier_content_layout.setSpacing(16)
+        return widget
+
+    def create_student_exams_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        # Metrics row
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_exam_count = MetricCard("Assessments Logged", "0", "📝", theme.INFO, theme.INFO_LIGHT)
+        self.metric_exam_avg = MetricCard("Average Total %", "0.0%", "📊", theme.PRIMARY, theme.PRIMARY_LIGHT)
+        self.metric_exam_grade = MetricCard("Cumulative Grade", "—", "🏆", theme.WARNING, theme.WARNING_LIGHT)
+        self.metric_exam_status = MetricCard("Academic Standing", "Active", "🎯", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        m_row.addWidget(self.metric_exam_count)
+        m_row.addWidget(self.metric_exam_avg)
+        m_row.addWidget(self.metric_exam_grade)
+        m_row.addWidget(self.metric_exam_status)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Official Subject-Wise Academic Examination Transcripts")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_exam_table = QTableWidget(0, 12)
+        self.profile_exam_table.setHorizontalHeaderLabels([
+            "Exam Term", "Grade", "English (100)", "Math (100)", "Science (100)",
+            "Urdu (100)", "Computer (100)", "Islamiat (100)", "Total / 600", "%", "Grade", "Status"
+        ])
+        theme.format_table(self.profile_exam_table, 44)
+        self.profile_exam_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        e_hdr = self.profile_exam_table.horizontalHeader()
+        e_hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 12):
+            e_hdr.setSectionResizeMode(i, QHeaderView.Interactive)
+            self.profile_exam_table.setColumnWidth(i, 80 if i in (1, 9, 10) else (90 if i in (8, 11) else 95))
+        c_lay.addWidget(self.profile_exam_table)
+
+        self.lbl_exam_empty = QLabel("No examination records logged yet for this student.")
+        self.lbl_exam_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_exam_empty.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; padding: 24px;")
+        c_lay.addWidget(self.lbl_exam_empty)
+
+        lay.addWidget(card)
+        return widget
+
+    def create_student_attendance_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_att_total = MetricCard("Total Marked Sessions", "0", "📅", theme.PRIMARY, theme.PRIMARY_LIGHT)
+        self.metric_att_present = MetricCard("Days Present", "0", "✅", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        self.metric_att_absent = MetricCard("Days Absent", "0", "❌", theme.DANGER, theme.DANGER_LIGHT)
+        self.metric_att_rate = MetricCard("Attendance Rate", "0.0%", "📈", theme.INFO, theme.INFO_LIGHT)
+        m_row.addWidget(self.metric_att_total)
+        m_row.addWidget(self.metric_att_present)
+        m_row.addWidget(self.metric_att_absent)
+        m_row.addWidget(self.metric_att_rate)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Chronological Attendance Record & Session Log")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_att_table = QTableWidget(0, 3)
+        self.profile_att_table.setHorizontalHeaderLabels(["Calendar Date", "Day of Week", "Recorded Status"])
+        theme.format_table(self.profile_att_table, 42)
+        self.profile_att_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        a_hdr = self.profile_att_table.horizontalHeader()
+        a_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        a_hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        a_hdr.setSectionResizeMode(2, QHeaderView.Interactive)
+        self.profile_att_table.setColumnWidth(0, 180)
+        self.profile_att_table.setColumnWidth(2, 160)
+        c_lay.addWidget(self.profile_att_table)
+
+        self.lbl_att_empty = QLabel("No attendance entries recorded yet for this student.")
+        self.lbl_att_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_att_empty.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; padding: 24px;")
+        c_lay.addWidget(self.lbl_att_empty)
+
+        lay.addWidget(card)
+        return widget
+
+    def create_student_fees_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        m_row = QHBoxLayout()
+        m_row.setSpacing(14)
+        self.metric_fee_billed = MetricCard("Total Billed Dues", "Rs. 0", "💳", theme.INFO, theme.INFO_LIGHT)
+        self.metric_fee_paid = MetricCard("Total Paid / Cleared", "Rs. 0", "✅", theme.SECONDARY, theme.SECONDARY_LIGHT)
+        self.metric_fee_outstanding = MetricCard("Outstanding Balance", "Rs. 0", "⏳", theme.WARNING, theme.WARNING_LIGHT)
+        m_row.addWidget(self.metric_fee_billed)
+        m_row.addWidget(self.metric_fee_paid)
+        m_row.addWidget(self.metric_fee_outstanding)
+        lay.addLayout(m_row)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Monthly Fee Invoices & Payment Ledger")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_fee_table = QTableWidget(0, 9)
+        self.profile_fee_table.setHorizontalHeaderLabels([
+            "Billing Month", "Tuition Fee", "IT Lab", "Sports", "Utilities",
+            "Total Payable", "Due Date", "Payment Status", "Payment Date"
+        ])
+        theme.format_table(self.profile_fee_table, 42)
+        self.profile_fee_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        f_hdr = self.profile_fee_table.horizontalHeader()
+        f_hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1, 9):
+            f_hdr.setSectionResizeMode(i, QHeaderView.Interactive)
+            self.profile_fee_table.setColumnWidth(i, 110 if i < 6 else 125)
+        c_lay.addWidget(self.profile_fee_table)
+
+        lay.addWidget(card)
+        return widget
+
+    def create_student_progression_tab(self) -> QWidget:
+        widget = QWidget()
+        lay = QVBoxLayout(widget)
+        lay.setContentsMargins(0, 14, 0, 0)
+        lay.setSpacing(16)
+
+        card = ModernCard()
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(20, 18, 20, 20)
+        c_lay.setSpacing(14)
+
+        header_lbl = QLabel("Academic Progression Decisions & Annual Audit Trail")
+        header_lbl.setFont(QFont(theme.FONT_FAMILY, 15, QFont.Bold))
+        header_lbl.setStyleSheet(f"color: {theme.TEXT_PRIMARY};")
+        c_lay.addWidget(header_lbl)
+
+        self.profile_prog_table = QTableWidget(0, 8)
+        self.profile_prog_table.setHorizontalHeaderLabels([
+            "Academic Session", "From Class", "Promoted To", "Score (600)",
+            "Percentage", "Result Status", "Promotion Decision", "Audit Timestamp"
+        ])
+        theme.format_table(self.profile_prog_table, 44)
+        self.profile_prog_table.setEditTriggers(QTableWidget.NoEditTriggers)
+
+        p_hdr = self.profile_prog_table.horizontalHeader()
+        p_hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(1, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(2, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(3, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(4, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(5, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(6, QHeaderView.Interactive)
+        p_hdr.setSectionResizeMode(7, QHeaderView.Stretch)
+        self.profile_prog_table.setColumnWidth(0, 130)
+        self.profile_prog_table.setColumnWidth(1, 100)
+        self.profile_prog_table.setColumnWidth(2, 110)
+        self.profile_prog_table.setColumnWidth(3, 100)
+        self.profile_prog_table.setColumnWidth(4, 95)
+        self.profile_prog_table.setColumnWidth(5, 110)
+        self.profile_prog_table.setColumnWidth(6, 210)
+        c_lay.addWidget(self.profile_prog_table)
+
+        self.lbl_prog_empty = QLabel("No academic progression or promotion history logged yet for this student.")
+        self.lbl_prog_empty.setAlignment(Qt.AlignCenter)
+        self.lbl_prog_empty.setStyleSheet("color: #64748B; font-size: 13px; font-weight: 500; padding: 24px;")
+        c_lay.addWidget(self.lbl_prog_empty)
+
+        lay.addWidget(card)
+        return widget
+
+    # --- 7. PROFILE POPULATION & NAVIGATION ---
+    def open_student_profile(self, student: Student, return_view: str = "directory"):
+        self.current_profile_student = student
+        self.profile_return_view = return_view
+
+        # Hero header update
+        self.lbl_profile_name.setText(student.get_full_name())
+        self.badge_profile_status.setText(student.status.upper() if student.status else "ENROLLED")
+        self.badge_profile_status.set_variant(
+            "success" if student.status == "ENROLLED" else "neutral"
+        )
+        self.badge_profile_adm.setText(f"ADM #{student.admission_no}")
+        self.badge_profile_class.setText(f"Class {student.class_name}")
+        self.lbl_profile_meta.setText(
+            f"Father: {student.father_name}  •  Contact: {student.contact or 'N/A'}  •  B-Form: {student.cnic or 'N/A'}"
+        )
+        if return_view == "class_students":
+            self.btn_profile_return.setText("← Return to Class Roster")
+        else:
+            self.btn_profile_return.setText("← Return to Directory")
+
+        # Populate tabs
+        self.populate_student_dossier(student)
+        self.populate_student_exams(student)
+        self.populate_student_attendance(student)
+        self.populate_student_fees(student)
+        self.populate_student_progression(student)
+
+        self.student_tabs.setCurrentIndex(0)
+        self.sub_stack.setCurrentIndex(5)
+
+    def close_student_profile(self):
+        if getattr(self, "profile_return_view", "directory") == "class_students":
+            self.sub_stack.setCurrentIndex(3)
+        else:
+            self.sub_stack.setCurrentIndex(4)
+
+    def on_profile_edit_clicked(self):
+        if hasattr(self, "current_profile_student") and self.current_profile_student:
+            self.edit_student(self.current_profile_student, return_view="profile")
+
+    def _make_info_widget(self, label: str, value: str) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        lbl_title = QLabel(label.upper())
+        lbl_title.setStyleSheet("color: #64748B; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;")
+        lbl_val = QLabel(str(value) if value and str(value).strip() else "—")
+        lbl_val.setStyleSheet("color: #0F172A; font-size: 14px; font-weight: 600;")
+        lbl_val.setWordWrap(True)
+        lay.addWidget(lbl_title)
+        lay.addWidget(lbl_val)
+        return w
+
+    def populate_student_dossier(self, s: Student):
+        # Clear layout
+        while self.dossier_content_layout.count():
+            item = self.dossier_content_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Card 1: Identity & Vital Statistics
+        card1 = ModernCard()
+        c1_lay = QVBoxLayout(card1)
+        c1_lay.setContentsMargins(22, 20, 22, 20)
+        c1_lay.setSpacing(16)
+        c1_lay.addWidget(FormSectionHeader(
+            "Candidate Identity & Vital Statistics", "👤",
+            "Official legal name, age, biological details, and national identification"
+        ))
+        g1 = QGridLayout()
+        g1.setHorizontalSpacing(24)
+        g1.setVerticalSpacing(14)
+        g1.addWidget(self._make_info_widget("Full Legal Name", s.get_full_name()), 0, 0)
+        g1.addWidget(self._make_info_widget("Father / Guardian Name", s.father_name), 0, 1)
+        g1.addWidget(self._make_info_widget("Admission Number", f"#{s.admission_no}"), 0, 2)
+        g1.addWidget(self._make_info_widget("Candidate Age", f"{s.age} Years" if s.age else "—"), 1, 0)
+        g1.addWidget(self._make_info_widget("B-Form / CNIC", s.cnic), 1, 1)
+        g1.addWidget(self._make_info_widget("Blood Group", s.blood_group), 1, 2)
+        g1.addWidget(self._make_info_widget("Previous Institution", s.prev_institution), 2, 0)
+        c1_lay.addLayout(g1)
+        self.dossier_content_layout.addWidget(card1)
+
+        # Card 2: Contact & Residential Coordinates
+        card2 = ModernCard()
+        c2_lay = QVBoxLayout(card2)
+        c2_lay.setContentsMargins(22, 20, 22, 20)
+        c2_lay.setSpacing(16)
+        c2_lay.addWidget(FormSectionHeader(
+            "Communication & Residential Coordinates", "📞",
+            "Emergency contact lines, guardian mobile, and legal home address"
+        ))
+        g2 = QGridLayout()
+        g2.setHorizontalSpacing(24)
+        g2.setVerticalSpacing(14)
+        g2.addWidget(self._make_info_widget("Primary Mobile Contact", s.contact), 0, 0)
+        g2.addWidget(self._make_info_widget("Residential Address", s.address), 0, 1, 1, 2)
+        c2_lay.addLayout(g2)
+        self.dossier_content_layout.addWidget(card2)
+
+        # Card 3: Institutional Placement & Enrollment Record
+        card3 = ModernCard()
+        c3_lay = QVBoxLayout(card3)
+        c3_lay.setContentsMargins(22, 20, 22, 20)
+        c3_lay.setSpacing(16)
+        c3_lay.addWidget(FormSectionHeader(
+            "Institutional Placement & Academic Record", "🏫",
+            "Classroom placement, current status, and registration notes"
+        ))
+        g3 = QGridLayout()
+        g3.setHorizontalSpacing(24)
+        g3.setVerticalSpacing(14)
+        g3.addWidget(self._make_info_widget("Enrolled Class Grade", f"Class {s.class_name}"), 0, 0)
+        g3.addWidget(self._make_info_widget("Enrollment Status", s.status), 0, 1)
+        g3.addWidget(self._make_info_widget("Official Dossier Notes", s.notes), 1, 0, 1, 2)
+        c3_lay.addLayout(g3)
+        self.dossier_content_layout.addWidget(card3)
+
+    def populate_student_exams(self, s: Student):
+        history = db.get_student_exam_history(s.admission_no)
+        self.metric_exam_count.set_value(str(len(history)))
+
+        if history:
+            self.lbl_exam_empty.hide()
+            self.profile_exam_table.show()
+            avg_pct = sum(h["percentage"] for h in history) / len(history)
+            self.metric_exam_avg.set_value(f"{avg_pct:.1f}%")
+
+            if avg_pct >= 90:
+                g_str = "A+"
+            elif avg_pct >= 80:
+                g_str = "A"
+            elif avg_pct >= 70:
+                g_str = "B"
+            elif avg_pct >= 60:
+                g_str = "C"
+            elif avg_pct >= 50:
+                g_str = "D"
+            else:
+                g_str = "F"
+            self.metric_exam_grade.set_value(g_str)
+            self.metric_exam_status.set_value("Qualified" if avg_pct >= 50.0 else "Needs Improvement")
+
+            self.profile_exam_table.setRowCount(len(history))
+            for row, h in enumerate(history):
+                self.profile_exam_table.setItem(row, 0, QTableWidgetItem(h["term"]))
+                self.profile_exam_table.setItem(row, 1, QTableWidgetItem(f"Class {h['class_name']}"))
+
+                subs = h.get("subjects", {})
+                for col_idx, subj_key in enumerate(["English", "Mathematics", "Science", "Urdu", "Computer", "Islamiat"], start=2):
+                    score = subs.get(subj_key, "-")
+                    score_str = f"{score:.0f}" if isinstance(score, (int, float)) else str(score)
+                    it = QTableWidgetItem(score_str)
+                    it.setTextAlignment(Qt.AlignCenter)
+                    self.profile_exam_table.setItem(row, col_idx, it)
+
+                it_tot = QTableWidgetItem(f"{h['total']:.0f}")
+                it_tot.setTextAlignment(Qt.AlignCenter)
+                self.profile_exam_table.setItem(row, 8, it_tot)
+
+                it_pct = QTableWidgetItem(f"{h['percentage']:.1f}%")
+                it_pct.setTextAlignment(Qt.AlignCenter)
+                self.profile_exam_table.setItem(row, 9, it_pct)
+
+                it_grd = QTableWidgetItem(h["grade"])
+                it_grd.setTextAlignment(Qt.AlignCenter)
+                self.profile_exam_table.setItem(row, 10, it_grd)
+
+                b_status = StatusBadge.from_status(h["status"])
+                self.profile_exam_table.setCellWidget(row, 11, theme.create_cell_widget(b_status))
+        else:
+            self.profile_exam_table.setRowCount(0)
+            self.profile_exam_table.hide()
+            self.lbl_exam_empty.show()
+            self.metric_exam_avg.set_value("—")
+            self.metric_exam_grade.set_value("—")
+            self.metric_exam_status.set_value("Active")
+
+    def populate_student_attendance(self, s: Student):
+        records = db.get_student_attendance_history(s.admission_no)
+        tot = len(records)
+        presents = sum(1 for r in records if r["status"] == "Present")
+        absents = sum(1 for r in records if r["status"] == "Absent")
+        rate = (presents / tot * 100.0) if tot > 0 else 100.0
+
+        self.metric_att_total.set_value(f"{tot} Days")
+        self.metric_att_present.set_value(f"{presents} Days")
+        self.metric_att_absent.set_value(f"{absents} Days")
+        self.metric_att_rate.set_value(f"{rate:.1f}%")
+
+        if records:
+            self.lbl_att_empty.hide()
+            self.profile_att_table.show()
+            self.profile_att_table.setRowCount(len(records))
+            for row, r in enumerate(records):
+                self.profile_att_table.setItem(row, 0, QTableWidgetItem(r["date"]))
+                try:
+                    d = datetime.strptime(r["date"], "%Y-%m-%d")
+                    day_name = d.strftime("%A")
+                except Exception:
+                    day_name = "—"
+                self.profile_att_table.setItem(row, 1, QTableWidgetItem(day_name))
+                badge = StatusBadge.from_status(r["status"])
+                self.profile_att_table.setCellWidget(row, 2, theme.create_cell_widget(badge))
+        else:
+            self.profile_att_table.setRowCount(0)
+            self.profile_att_table.hide()
+            self.lbl_att_empty.show()
+
+    def populate_student_fees(self, s: Student):
+        ledger = db.get_student_fee_ledger(s.admission_no)
+        tot_billed = sum(r["total"] for r in ledger)
+        tot_paid = sum(r["total"] for r in ledger if r["status"] == "Paid")
+        tot_due = tot_billed - tot_paid
+
+        self.metric_fee_billed.set_value(f"Rs. {tot_billed:,.0f}")
+        self.metric_fee_paid.set_value(f"Rs. {tot_paid:,.0f}")
+        self.metric_fee_outstanding.set_value(f"Rs. {tot_due:,.0f}")
+
+        self.profile_fee_table.setRowCount(len(ledger))
+        for row, r in enumerate(ledger):
+            self.profile_fee_table.setItem(row, 0, QTableWidgetItem(r["month_label"]))
+            self.profile_fee_table.setItem(row, 1, QTableWidgetItem(f"Rs. {r['tuition']:,.0f}"))
+            self.profile_fee_table.setItem(row, 2, QTableWidgetItem(f"Rs. {r['it_lab']:,.0f}"))
+            self.profile_fee_table.setItem(row, 3, QTableWidgetItem(f"Rs. {r['sports']:,.0f}"))
+            self.profile_fee_table.setItem(row, 4, QTableWidgetItem(f"Rs. {r['utilities']:,.0f}"))
+            self.profile_fee_table.setItem(row, 5, QTableWidgetItem(f"Rs. {r['total']:,.0f}"))
+            self.profile_fee_table.setItem(row, 6, QTableWidgetItem(r["due_date"]))
+
+            badge = StatusBadge.from_status(r["status"])
+            self.profile_fee_table.setCellWidget(row, 7, theme.create_cell_widget(badge))
+            self.profile_fee_table.setItem(row, 8, QTableWidgetItem(r["paid_date"]))
+
+    def populate_student_progression(self, s: Student):
+        history = db.get_promotion_history(admission_no=s.admission_no)
+        if history:
+            self.lbl_prog_empty.hide()
+            self.profile_prog_table.show()
+            self.profile_prog_table.setRowCount(len(history))
+            for row, p in enumerate(history):
+                self.profile_prog_table.setItem(row, 0, QTableWidgetItem(p["academicSession"]))
+                self.profile_prog_table.setItem(row, 1, QTableWidgetItem(f"Class {p['fromClass']}"))
+                to_cls = p["toClass"]
+                to_str = f"Class {to_cls}" if to_cls != "ALUMNI" else "ALUMNI / GRADUATE"
+                self.profile_prog_table.setItem(row, 2, QTableWidgetItem(to_str))
+                self.profile_prog_table.setItem(row, 3, QTableWidgetItem(f"{p['totalScore']:.0f} / {p['maxScore']:.0f}"))
+                self.profile_prog_table.setItem(row, 4, QTableWidgetItem(f"{p['percentage']:.1f}%"))
+
+                res_badge = StatusBadge.from_status(p["resultStatus"])
+                self.profile_prog_table.setCellWidget(row, 5, theme.create_cell_widget(res_badge))
+
+                dec = p["promotionDecision"]
+                dec_variant = "success" if "PROMOTED" in dec.upper() else ("primary" if "GRADUATED" in dec.upper() else "warning")
+                dec_badge = StatusBadge(dec, dec_variant)
+                self.profile_prog_table.setCellWidget(row, 6, theme.create_cell_widget(dec_badge))
+
+                self.profile_prog_table.setItem(row, 7, QTableWidgetItem(p["timestamp"]))
+        else:
+            self.profile_prog_table.setRowCount(0)
+            self.profile_prog_table.hide()
+            self.lbl_prog_empty.show()
+
